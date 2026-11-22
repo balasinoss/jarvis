@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  FREE variant (free Apple ID + Sideloadly).
+  A free Apple ID cannot sign the "Hotspot" entitlement that Meta's Wi-Fi camera
+  transport needs, so this variant leaves the Wi-Fi entries out and enables the
+  Bluetooth Classic path instead (lower camera quality, but no paid account needed).
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>el</string>
+	<key>CFBundleDisplayName</key>
+	<string>Jarvis</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Jarvis</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.jarvis.glasses</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>jarvisglasses</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- Meta Wearables Device Access Toolkit. Empty MetaAppID = Developer Mode (no Meta registration needed). -->
+	<key>MWDAT</key>
+	<dict>
+		<key>AppLinkURLScheme</key>
+		<string>jarvisglasses://</string>
+		<key>MetaAppID</key>
+		<string></string>
+		<key>ClientToken</key>
+		<string></string>
+		<key>TeamID</key>
+		<string></string>
+		<key>Analytics</key>
+		<dict>
+			<key>OptOut</key>
+			<true/>
+		</dict>
+	</dict>
+
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+		<string>external-accessory</string>
+		<string>processing</string>
+	</array>
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array>
+		<string>com.meta.ar.wearable</string>
+	</array>
+
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Χρειάζεται για να συνδεθεί ο Jarvis με τα γυαλιά σου.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Χρειάζεται για να συνδεθεί ο Jarvis με τα γυαλιά σου.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Ο Jarvis ακούει από το μικρόφωνο των γυαλιών μόνο όσο μιλάς μαζί του.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Για να βρίσκει τον αριθμό όταν του λες «στείλε μήνυμα στη Μαρία».</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Για να ακούει ο Jarvis πότε τον φωνάζεις με το όνομά του. Η αναγνώριση γίνεται μέσα στο iPhone.</string>
+
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+		<string>viber</string>
+		<string>shortcuts</string>
+	</array>
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>
