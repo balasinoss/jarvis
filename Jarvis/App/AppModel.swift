@@ -371,8 +371,13 @@ final class AppModel: ObservableObject {
         let sentSeconds = Double(self.gemini?.audioChunksSent ?? 0) / 10
         let received = self.gemini?.audioChunksReceived ?? 0
         let messages = self.gemini?.messagesReceived ?? 0
+        if self.audio.fellBackToPhoneMic {
+          self.micSource = "Μικρόφωνο κινητού (τα γυαλιά έστελναν σιωπή)"
+        } else {
+          self.micSource = self.audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
+        }
         self.diagnostics =
-          "🎙️ \(bars)  ήχος: \(self.audio.tapBuffers)  →Gemini: \(String(format: "%.0f", sentSeconds))δ  ←απαντήσεις: \(messages)/\(received)  ↻\(self.audio.restarts)"
+          "🎙️ \(self.audio.isSilent ? "🔇" : "")\(bars)  ήχος: \(self.audio.tapBuffers)  →Gemini: \(String(format: "%.0f", sentSeconds))δ  ←απαντήσεις: \(messages)/\(received)  ↻\(self.audio.restarts)"
           + (self.isStandby ? "\n👂 άκουσα: \(self.wake.lastHeard)" : "")
       }
     }

@@ -36,6 +36,13 @@ final class AudioPipeline {
   private(set) var chunksOut = 0
   private(set) var micLevel: Float = 0  // 0…1
   private(set) var restarts = 0
+  /// The glasses mic has been sending pure digital silence (Bluetooth link not really open).
+  private(set) var isSilent = false
+  /// We gave up on the glasses mic and switched to the iPhone mic.
+  private(set) var fellBackToPhoneMic = false
+  private var zeroSince: Date?
+  private var silenceRecoveries = 0
+  private var forcePhoneMic = false
 
   private var engine = AVAudioEngine()
   private var player = AVAudioPlayerNode()
@@ -74,6 +81,11 @@ final class AudioPipeline {
     chunksOut = 0
     micLevel = 0
     restarts = 0
+    isSilent = false
+    fellBackToPhoneMic = false
+    zeroSince = nil
+    silenceRecoveries = 0
+    forcePhoneMic = false
 
     try configureSession()
     do {
@@ -112,16 +124,41 @@ final class AudioPipeline {
 
   private func configureSession() throws {
     let session = AVAudioSession.sharedInstance()
-    try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
+    // Same settings as Meta's official CameraAccess sample, which is tested on these glasses.
+    try session.setCategory(.playAndRecord, mode: .videoRecording, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .mixWithOthers])
     try session.setActive(true)
-    if let glasses = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
-      try? session.setPreferredInput(glasses)
-    }
+    selectInput(session)
     usingGlassesMic = session.currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
     if !usingGlassesMic && !allowPhoneMic {
       try? session.setActive(false, options: .notifyOthersOnDeactivation)
       throw AudioError.glassesMicMissing
     }
+  }
+
+  private func selectInput(_ session: AVAudioSession) {
+    if forcePhoneMic {
+      if let phone = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+        try? session.setPreferredInput(phone)
+      }
+    } else if let glasses = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
+      try? session.setPreferredInput(glasses)
+    }
+  }
+
+  /// Closes and reopens the whole audio session, which makes iOS re-open the Bluetooth
+  /// "call" link to the glasses from scratch.
+  private func hardReset() {
+    guard running else { return }
+    lastRebuild = Date()
+    restarts += 1
+    tearDownEngine()
+    let session = AVAudioSession.sharedInstance()
+    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+    Thread.sleep(forTimeInterval: 0.4)
+    try? configureSession()
+    try? buildEngine()
+    zeroSince = nil
+    lastTapDate = Date()
   }
 
   /// Creates a fresh engine + player, installs the mic tap and starts everything.
@@ -184,9 +221,7 @@ final class AudioPipeline {
     do {
       let session = AVAudioSession.sharedInstance()
       try? session.setActive(true)
-      if let glasses = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
-        try? session.setPreferredInput(glasses)
-      }
+      selectInput(session)
       usingGlassesMic = session.currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
       try buildEngine()
     } catch {
@@ -201,6 +236,16 @@ final class AudioPipeline {
       guard let self, self.running else { return }
       if Date().timeIntervalSince(self.lastTapDate) > 1.2 {
         self.rebuild(reason: "watchdog")
+        return
+      }
+      // Pure digital silence from the glasses for 2.5 s: the Bluetooth link isn't really open.
+      if let since = self.zeroSince, Date().timeIntervalSince(since) > 2.5 {
+        self.silenceRecoveries += 1
+        if self.silenceRecoveries > 2 && !self.forcePhoneMic && self.allowPhoneMic {
+          self.forcePhoneMic = true
+          self.fellBackToPhoneMic = true
+        }
+        self.hardReset()
       }
     }
   }
@@ -302,6 +347,13 @@ final class AudioPipeline {
     var peak: Int32 = 0
     for i in 0..<Int(out.frameLength) { peak = max(peak, abs(Int32(samples[i]))) }
     micLevel = Float(peak) / 32768
+    if peak == 0 {
+      if zeroSince == nil { zeroSince = Date() }
+      isSilent = true
+    } else {
+      zeroSince = nil
+      isSilent = false
+    }
 
     lock.lock()
     micBuffer.append(bytes)
