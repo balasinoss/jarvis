@@ -1,3 +1,6 @@
+# Builds the iPhone app on GitHub's free cloud Macs, so you never need your own Mac.
+# Result: an unsigned Jarvis.ipa (download it from the run's "Artifacts" section)
+# that you install with Sideloadly on Windows.
 name: Build iPhone app
 
 on:
@@ -10,6 +13,10 @@ on:
         type: choice
         options: [free, paid]
         default: free
+
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   build:
@@ -39,7 +46,6 @@ jobs:
           else
             EXTRA="INFOPLIST_FILE=Info-Free.plist"
           fi
-          set -o pipefail
           xcodebuild \
             -project Jarvis.xcodeproj \
             -scheme Jarvis \
@@ -53,8 +59,13 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             $EXTRA \
-            build | tee build.log | grep -E "error:|warning: .*Jarvis/|BUILD (SUCCEEDED|FAILED)" || true
-          test -d build/Build/Products/Release-iphoneos/Jarvis.app
+            build > build.log 2>&1 || BUILD_FAILED=1
+          grep -E "error:|BUILD (SUCCEEDED|FAILED)" build.log | sort -u | head -100 || true
+          APP=build/Build/Products/Release-iphoneos/Jarvis.app
+          if [ -n "$BUILD_FAILED" ] || [ ! -f "$APP/Info.plist" ] || [ ! -f "$APP/Jarvis" ]; then
+            echo "Build failed"
+            exit 1
+          fi
 
       - name: Package Jarvis.ipa
         run: |
@@ -69,6 +80,25 @@ jobs:
           name: Jarvis-${{ env.VARIANT }}-ipa
           path: Jarvis-${{ env.VARIANT }}.ipa
           retention-days: 30
+
+      - name: Report errors as an issue (so they can be read and fixed)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo '```'
+            if [ -f build.log ]; then
+              grep -E "error:" build.log | sed 's#/Users/runner/work/[^ ]*/Jarvis/#Jarvis/#' | sort -u | head -120 || true
+              echo "----- last lines -----"
+              tail -40 build.log
+            else
+              echo "No build.log (failed before compiling)."
+            fi
+            echo '```'
+          } > report.md
+          gh issue create --repo "${{ github.repository }}" --title "Build failed (run ${{ github.run_number }})" --body-file report.md
 
       - name: Upload build log (for fixing errors)
         if: always()
