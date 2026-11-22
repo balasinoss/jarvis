@@ -53,7 +53,9 @@ final class AppModel: ObservableObject {
     didSet { geminiForAudioThread = gemini }
   }
   nonisolated(unsafe) private let audio = AudioPipeline()
-  private let wake = WakeWordListener()
+  nonisolated(unsafe) private let wake = WakeWordListener()
+  /// True while waiting for "Jarvis": mic audio goes to the wake-word recognizer.
+  nonisolated(unsafe) private var feedWakeWord = false
   // Copies read from the audio thread (kept in sync on the main thread).
   nonisolated(unsafe) private var geminiForAudioThread: GeminiLiveClient?
   nonisolated(unsafe) private var halfDuplexSnapshot = false
@@ -69,6 +71,7 @@ final class AppModel: ObservableObject {
 
   private init() {
     audio.onMicChunk = Self.makeMicHandler(self)
+    audio.onRawMicBuffer = Self.makeRawHandler(self)
     audio.onSpeakingChanged = { [weak self] speaking in
       guard let self, self.isActive else { return }
       if speaking {
@@ -80,6 +83,7 @@ final class AppModel: ObservableObject {
     }
     wake.onWake = { [weak self] in
       guard let self else { return }
+      self.feedWakeWord = false
       self.isStandby = false
       self.log(.system, "👂 «Jarvis»")
       self.start(fromWakeWord: true)
@@ -92,6 +96,13 @@ final class AppModel: ObservableObject {
       guard let model else { return }
       if model.halfDuplexSnapshot && model.audio.isSpeaking { return }
       model.geminiForAudioThread?.sendAudio(chunk)
+    }
+  }
+
+  nonisolated private static func makeRawHandler(_ model: AppModel) -> (AVAudioPCMBuffer) -> Void {
+    return { [weak model] buffer in
+      guard let model, model.feedWakeWord else { return }
+      model.wake.append(buffer)
     }
   }
 
@@ -123,10 +134,16 @@ final class AppModel: ObservableObject {
       }
       guard settings.wakeWord, !isActive, !isStandby else { return }
       do {
-        try wake.start(allowPhoneMic: settings.allowPhoneMic)
+        // One shared microphone for standby and conversations: no switching.
+        if !audio.isRunning {
+          try audio.start(allowPhoneMic: settings.allowPhoneMic, echoCancellation: settings.echoCancellation)
+        }
+        try wake.start()
+        feedWakeWord = true
         isStandby = true
         status = .standby
-        micSource = wake.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
+        micSource = audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
+        startDiagnostics()
       } catch {
         status = .error(error.localizedDescription)
       }
@@ -139,8 +156,12 @@ final class AppModel: ObservableObject {
     if enabled {
       enterStandbyIfNeeded()
     } else if isStandby {
-      wake.stop(deactivateSession: true)
+      feedWakeWord = false
+      wake.stop()
       isStandby = false
+      if !isActive { audio.stop(deactivateSession: true) }
+      diagTimer?.invalidate()
+      diagnostics = ""
       status = .idle
       micSource = ""
     }
@@ -153,7 +174,8 @@ final class AppModel: ObservableObject {
   func start(fromWakeWord: Bool) {
     guard !isActive else { return }
     if isStandby {
-      wake.stop(deactivateSession: false)
+      feedWakeWord = false
+      wake.stop()
       isStandby = false
     }
     guard settings.hasGeminiKey else {
@@ -175,7 +197,9 @@ final class AppModel: ObservableObject {
       }
       guard isActive else { return }  // user pressed stop while the permission prompt was up
       do {
-        try audio.start(allowPhoneMic: settings.allowPhoneMic, echoCancellation: settings.echoCancellation)
+        if !audio.isRunning {
+          try audio.start(allowPhoneMic: settings.allowPhoneMic, echoCancellation: settings.echoCancellation)
+        }
         micSource = audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
         audio.playChime()  // "I'm listening"
       } catch {
@@ -200,7 +224,11 @@ final class AppModel: ObservableObject {
     diagnostics = ""
     gemini?.disconnect()
     gemini = nil
-    audio.stop(deactivateSession: !backToStandby)
+    if backToStandby {
+      audio.flushPlayback()  // keep the mic running for "Jarvis" standby
+    } else {
+      audio.stop(deactivateSession: true)
+    }
     glasses.stopSession()
     closeOpenLines()
     status = .idle
@@ -337,7 +365,7 @@ final class AppModel: ObservableObject {
     diagTimer?.invalidate()
     diagTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
       Task { @MainActor in
-        guard let self, self.isActive else { return }
+        guard let self, self.isActive || self.isStandby else { return }
         let level = Int(min(1, self.audio.micLevel * 4) * 10)
         let bars = String(repeating: "▮", count: level) + String(repeating: "▯", count: 10 - level)
         let sentSeconds = Double(self.gemini?.audioChunksSent ?? 0) / 10
@@ -345,6 +373,7 @@ final class AppModel: ObservableObject {
         let messages = self.gemini?.messagesReceived ?? 0
         self.diagnostics =
           "🎙️ \(bars)  ήχος: \(self.audio.tapBuffers)  →Gemini: \(String(format: "%.0f", sentSeconds))δ  ←απαντήσεις: \(messages)/\(received)  ↻\(self.audio.restarts)"
+          + (self.isStandby ? "\n👂 άκουσα: \(self.wake.lastHeard)" : "")
       }
     }
   }

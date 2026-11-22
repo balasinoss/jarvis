@@ -71,7 +71,7 @@ struct ContentView: View {
           Text(app.micSource).font(.caption).foregroundStyle(.secondary)
         }
         if !app.diagnostics.isEmpty {
-          Text(app.diagnostics).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+          Text(app.diagnostics).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(4)
         }
       }
       Spacer()

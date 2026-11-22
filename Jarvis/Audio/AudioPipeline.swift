@@ -24,6 +24,8 @@ final class AudioPipeline {
 
   /// Called on an audio thread with ~100 ms of 16-bit/16 kHz mono PCM.
   var onMicChunk: ((Data) -> Void)?
+  /// Called on the audio thread with the raw mic buffer (used by the "Jarvis" wake word).
+  var onRawMicBuffer: ((AVAudioPCMBuffer) -> Void)?
   /// Called on the main thread when Jarvis starts/stops talking.
   var onSpeakingChanged: ((Bool) -> Void)?
 
@@ -53,6 +55,8 @@ final class AudioPipeline {
   private var watchdog: Timer?
   private var sessionObservers: [NSObjectProtocol] = []
   private var engineObserver: NSObjectProtocol?
+
+  var isRunning: Bool { running }
 
   var isSpeaking: Bool {
     lock.lock()
@@ -276,6 +280,7 @@ final class AudioPipeline {
   private func handleMic(_ buffer: AVAudioPCMBuffer) {
     tapBuffers += 1
     lastTapDate = Date()
+    onRawMicBuffer?(buffer)
     guard let converter, buffer.format.sampleRate > 0 else { return }
     let ratio = sendFormat.sampleRate / buffer.format.sampleRate
     let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
