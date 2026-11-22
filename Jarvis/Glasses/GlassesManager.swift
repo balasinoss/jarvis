@@ -17,6 +17,11 @@ final class GlassesManager: ObservableObject {
   @Published private(set) var cameraPermissionGranted = false
   @Published private(set) var isStreaming = false
   @Published private(set) var lastError: String?
+  /// The small Meta "Device Access" app inside the glasses needs updating (separate from firmware).
+  @Published private(set) var needsGlassesAppUpdate = false
+  /// The glasses firmware is too old for this toolkit version.
+  @Published private(set) var needsFirmwareUpdate = false
+  private var sessionFailed = false
 
   private let wearables: WearablesInterface
   private let deviceSelector: AutoDeviceSelector
@@ -53,6 +58,9 @@ final class GlassesManager: ObservableObject {
       guard let self else { return }
       for await deviceId in self.deviceSelector.activeDeviceStream() {
         self.hasActiveDevice = deviceId != nil
+        if let deviceId, let device = self.wearables.deviceForIdentifier(deviceId) {
+          self.needsFirmwareUpdate = device.compatibility() == .deviceUpdateRequired
+        }
       }
     }
     Task { await refreshCameraPermission() }
@@ -93,6 +101,32 @@ final class GlassesManager: ObservableObject {
       }
     }
   }
+
+  // MARK: - Updates (both open the Meta AI app)
+
+  /// Updates Meta's small "apps support" component on the glasses.
+  func openGlassesAppUpdate() {
+    Task {
+      do {
+        try await wearables.openDATGlassesAppUpdate()
+        needsGlassesAppUpdate = false
+      } catch {
+        lastError = "Δεν άνοιξε η ενημέρωση: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func openFirmwareUpdate() {
+    Task {
+      do {
+        try await wearables.openFirmwareUpdate()
+      } catch {
+        lastError = "Δεν άνοιξε η ενημέρωση: \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func clearError() { lastError = nil }
 
   // MARK: - Camera permission (granted inside the Meta AI app)
 
@@ -188,9 +222,10 @@ final class GlassesManager: ObservableObject {
         Task { @MainActor in self?.handleSessionState(state) }
       }.store(in: sessionTokens)
       newSession.errorPublisher.listen { [weak self] error in
-        Task { @MainActor in self?.lastError = error.localizedDescription }
+        Task { @MainActor in self?.handleSessionError(error) }
       }.store(in: sessionTokens)
       sessionState = .starting
+      sessionFailed = false
       try newSession.start()
     } catch {
       lastError = "Δεν βρέθηκαν τα γυαλιά: \(error.localizedDescription)"
@@ -198,11 +233,28 @@ final class GlassesManager: ObservableObject {
       sessionState = .idle
       return false
     }
-    let ok = await waitFor(seconds: 12) { self.sessionState == .started }
+    _ = await waitFor(seconds: 12) { self.sessionState == .started || self.sessionFailed }
+    let ok = sessionState == .started
     if !ok && lastError == nil {
       lastError = "Τα γυαλιά δεν απάντησαν. Φόρεσέ τα και βεβαιώσου ότι είναι συνδεδεμένα στο Meta AI."
     }
     return ok
+  }
+
+  private func handleSessionError(_ error: DeviceSessionError) {
+    switch error {
+    case .datAppOnTheGlassesUpdateRequired:
+      needsGlassesAppUpdate = true
+      sessionFailed = true
+      lastError =
+        "Χρειάζεται ενημέρωση το «Device Access» της Meta μέσα στα γυαλιά (ξεχωριστό από το κανονικό update). Άνοιξε τον Jarvis και πάτα «Ενημέρωση γυαλιών για εφαρμογές»."
+    case .dwaOutOfStuRange:
+      // Non-blocking warning from Meta; carry on.
+      break
+    default:
+      sessionFailed = true
+      lastError = "Γυαλιά: \(error.description)"
+    }
   }
 
   private func handleSessionState(_ state: DeviceSessionState) {

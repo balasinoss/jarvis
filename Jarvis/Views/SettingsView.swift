@@ -66,6 +66,11 @@ struct SettingsView: View {
           LabeledContent("Συνδεδεμένα με Meta AI", value: glasses.isRegistered ? "Ναι" : "Όχι")
           LabeledContent("Βρέθηκαν τώρα", value: glasses.hasActiveDevice ? "Ναι" : "Όχι")
           LabeledContent("Άδεια κάμερας", value: glasses.cameraPermissionGranted ? "Ναι" : "Όχι")
+          if glasses.isRegistered && !glasses.cameraPermissionGranted {
+            Button("Δώσε άδεια κάμερας") { glasses.requestCameraPermission() }
+          }
+          Button("Ενημέρωση γυαλιών για εφαρμογές (Meta)") { glasses.openGlassesAppUpdate() }
+          Button("Ενημέρωση λογισμικού γυαλιών") { glasses.openFirmwareUpdate() }
           if glasses.isRegistered {
             Button("Αποσύνδεση γυαλιών από τον Jarvis", role: .destructive) { glasses.disconnect() }
           } else {

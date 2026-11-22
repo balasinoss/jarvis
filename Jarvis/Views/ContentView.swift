@@ -14,6 +14,7 @@ struct ContentView: View {
       VStack(spacing: 16) {
         if needsSetup { SetupChecklist(showSettings: $showSettings) }
         statusHeader
+        glassesAlert
         startButton
         wakeWordToggle
         transcriptView
@@ -30,7 +31,10 @@ struct ContentView: View {
       }
       .task { app.enterStandbyIfNeeded() }
       .onChange(of: scenePhase) { _, phase in
-        if phase == .active { app.enterStandbyIfNeeded() }
+        if phase == .active {
+          app.enterStandbyIfNeeded()
+          Task { await glasses.refreshCameraPermission() }
+        }
       }
       .onChange(of: settings.hasGeminiKey) { app.enterStandbyIfNeeded() }
       .sheet(isPresented: $showSettings) { SettingsView() }
@@ -80,6 +84,33 @@ struct ContentView: View {
     }
     .padding(12)
     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+  }
+
+  /// Shows glasses problems (updates, camera errors) with a button to fix them.
+  @ViewBuilder private var glassesAlert: some View {
+    if glasses.needsGlassesAppUpdate || glasses.needsFirmwareUpdate || (glasses.lastError != nil && !needsSetup) {
+      VStack(alignment: .leading, spacing: 8) {
+        Label("Γυαλιά", systemImage: "exclamationmark.triangle.fill").font(.headline).foregroundStyle(.orange)
+        if let error = glasses.lastError {
+          Text(error).font(.callout)
+        }
+        if glasses.needsGlassesAppUpdate {
+          Button("Ενημέρωση γυαλιών για εφαρμογές") { glasses.openGlassesAppUpdate() }
+            .buttonStyle(.borderedProminent)
+        }
+        if glasses.needsFirmwareUpdate {
+          Button("Ενημέρωση λογισμικού γυαλιών") { glasses.openFirmwareUpdate() }
+            .buttonStyle(.borderedProminent)
+        }
+        if !glasses.cameraPermissionGranted && glasses.isRegistered {
+          Button("Άδεια κάμερας") { glasses.requestCameraPermission() }.buttonStyle(.bordered)
+        }
+        Button("Απόκρυψη") { glasses.clearError() }.font(.caption)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(12)
+      .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+    }
   }
 
   private var startButton: some View {
