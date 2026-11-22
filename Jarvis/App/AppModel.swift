@@ -44,6 +44,8 @@ final class AppModel: ObservableObject {
   @Published private(set) var isActive = false
   @Published private(set) var micSource = ""
   @Published private(set) var isStandby = false
+  /// One-line live diagnostics (mic level, audio sent/received).
+  @Published private(set) var diagnostics = ""
 
   let glasses = GlassesManager()
   let settings = Settings.shared
@@ -61,6 +63,7 @@ final class AppModel: ObservableObject {
   private var reconnectAttempts = 0
   private var lastActivity = Date()
   private var idleTimer: Timer?
+  private var diagTimer: Timer?
   private var runningToolCalls = 0
   private var userStopped = true
 
@@ -172,7 +175,7 @@ final class AppModel: ObservableObject {
       }
       guard isActive else { return }  // user pressed stop while the permission prompt was up
       do {
-        try audio.start(allowPhoneMic: settings.allowPhoneMic)
+        try audio.start(allowPhoneMic: settings.allowPhoneMic, echoCancellation: settings.echoCancellation)
         micSource = audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
         audio.playChime()  // "I'm listening"
       } catch {
@@ -181,6 +184,7 @@ final class AppModel: ObservableObject {
       }
       connectGemini()
       startIdleTimer()
+      startDiagnostics()
     }
   }
 
@@ -191,6 +195,9 @@ final class AppModel: ObservableObject {
     isActive = false
     idleTimer?.invalidate()
     idleTimer = nil
+    diagTimer?.invalidate()
+    diagTimer = nil
+    diagnostics = ""
     gemini?.disconnect()
     gemini = nil
     audio.stop(deactivateSession: !backToStandby)
@@ -254,6 +261,8 @@ final class AppModel: ObservableObject {
     case .ready:
       reconnectAttempts = 0
       status = .listening
+      // Short spoken hello: proves the voice path (Gemini → glasses speakers) works.
+      gemini?.sendText("(Ο χρήστης μόλις σε κάλεσε. Πες μόνο «Ναι;» με μία λέξη και περίμενε.)")
       if settings.liveCamera { startLiveCamera() }
 
     case .audio(let pcm):
@@ -319,6 +328,24 @@ final class AppModel: ObservableObject {
         self.gemini?.sendImage(jpeg: jpeg)
       }
       if !ok { log(.system, "⚠️ Ζωντανή κάμερα: \(glasses.lastError ?? "δεν ξεκίνησε")") }
+    }
+  }
+
+  // MARK: - On-screen diagnostics
+
+  private func startDiagnostics() {
+    diagTimer?.invalidate()
+    diagTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+      Task { @MainActor in
+        guard let self, self.isActive else { return }
+        let level = Int(min(1, self.audio.micLevel * 4) * 10)
+        let bars = String(repeating: "▮", count: level) + String(repeating: "▯", count: 10 - level)
+        let sentSeconds = Double(self.gemini?.audioChunksSent ?? 0) / 10
+        let received = self.gemini?.audioChunksReceived ?? 0
+        let messages = self.gemini?.messagesReceived ?? 0
+        self.diagnostics =
+          "🎙️ \(bars)  ήχος: \(self.audio.tapBuffers)  →Gemini: \(String(format: "%.0f", sentSeconds))δ  ←απαντήσεις: \(messages)/\(received)"
+      }
     }
   }
 

@@ -66,6 +66,9 @@ struct ContentView: View {
         if !app.micSource.isEmpty {
           Text(app.micSource).font(.caption).foregroundStyle(.secondary)
         }
+        if !app.diagnostics.isEmpty {
+          Text(app.diagnostics).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+        }
       }
       Spacer()
       if let photo = app.lastPhoto {

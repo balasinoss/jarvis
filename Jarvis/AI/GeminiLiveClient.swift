@@ -43,6 +43,10 @@ final class GeminiLiveClient: NSObject {
   private var closedReported = false
   private let sendQueue = DispatchQueue(label: "jarvis.gemini.send")
   private let bufferLock = NSLock()
+  // Diagnostics
+  private(set) var audioChunksSent = 0
+  private(set) var messagesReceived = 0
+  private(set) var audioChunksReceived = 0
   private var earlyAudio: [Data] = []
 
   init(config: Config) {
@@ -87,6 +91,7 @@ final class GeminiLiveClient: NSObject {
       bufferLock.unlock()
       return
     }
+    audioChunksSent += 1
     send([
       "realtimeInput": [
         "audio": ["data": pcm16k.base64EncodedString(), "mimeType": "audio/pcm;rate=16000"]
@@ -171,6 +176,7 @@ final class GeminiLiveClient: NSObject {
 
   private func handle(_ data: Data) {
     guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+    messagesReceived += 1
 
     if json["setupComplete"] != nil {
       isReady = true
@@ -191,6 +197,7 @@ final class GeminiLiveClient: NSObject {
             let b64 = inline["data"] as? String,
             let audio = Data(base64Encoded: b64)
           {
+            audioChunksReceived += 1
             emit(.audio(audio))
           }
         }

@@ -30,6 +30,7 @@ struct SettingsView: View {
             ForEach(Settings.geminiVoices, id: \.self) { Text($0).tag($0) }
           }
           Toggle("Κλείσιμο μικροφώνου όσο μιλάει", isOn: $settings.halfDuplex)
+          Toggle("Ακύρωση ηχούς iPhone", isOn: $settings.echoCancellation)
           Toggle("Μικρόφωνο κινητού αν λείπουν τα γυαλιά", isOn: $settings.allowPhoneMic)
           Stepper("Αυτόματο κλείσιμο μετά από \(settings.idleMinutes) λεπτά σιωπής", value: $settings.idleMinutes, in: 1...30)
         }

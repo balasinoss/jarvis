@@ -25,6 +25,11 @@ final class AudioPipeline {
 
   private(set) var usingGlassesMic = false
 
+  // Diagnostics shown on screen: is sound actually coming in from the mic?
+  private(set) var tapBuffers = 0
+  private(set) var chunksOut = 0
+  private(set) var micLevel: Float = 0  // 0…1
+
   private let engine = AVAudioEngine()
   private let player = AVAudioPlayerNode()
   private let playbackFormat = AVAudioFormat(
@@ -46,7 +51,7 @@ final class AudioPipeline {
 
   // MARK: - Start / stop
 
-  func start(allowPhoneMic: Bool) throws {
+  func start(allowPhoneMic: Bool, echoCancellation: Bool = false) throws {
     guard !running else { return }
     let session = AVAudioSession.sharedInstance()
     try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
@@ -61,8 +66,12 @@ final class AudioPipeline {
       throw AudioError.glassesMicMissing
     }
 
-    // Echo cancellation, so Jarvis doesn't hear (and interrupt) himself.
-    try? engine.inputNode.setVoiceProcessingEnabled(true)
+    // Optional echo cancellation. Off by default: on some Bluetooth headsets it delivers
+    // silence. The glasses already cancel echo themselves.
+    try? engine.inputNode.setVoiceProcessingEnabled(echoCancellation)
+    tapBuffers = 0
+    chunksOut = 0
+    micLevel = 0
 
     engine.attach(player)
     engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
@@ -186,6 +195,7 @@ final class AudioPipeline {
   }
 
   private func handleMic(_ buffer: AVAudioPCMBuffer) {
+    tapBuffers += 1
     guard let converter else { return }
     let ratio = sendFormat.sampleRate / buffer.format.sampleRate
     let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
@@ -204,6 +214,9 @@ final class AudioPipeline {
     }
     guard status != .error, out.frameLength > 0, let samples = out.int16ChannelData?[0] else { return }
     let bytes = Data(bytes: samples, count: Int(out.frameLength) * 2)
+    var peak: Int32 = 0
+    for i in 0..<Int(out.frameLength) { peak = max(peak, abs(Int32(samples[i]))) }
+    micLevel = Float(peak) / 32768
 
     lock.lock()
     micBuffer.append(bytes)
@@ -213,6 +226,7 @@ final class AudioPipeline {
       micBuffer.removeFirst(3200)
     }
     lock.unlock()
+    chunksOut += chunks.count
     for chunk in chunks { onMicChunk?(Data(chunk)) }
   }
 

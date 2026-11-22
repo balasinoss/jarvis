@@ -54,6 +54,8 @@ final class Settings: ObservableObject {
   @Published var idleMinutes: Int { didSet { save("idleMinutes", idleMinutes) } }
   /// Standby: wait for you to say "Jarvis" (keeps the glasses mic open, like a call).
   @Published var wakeWord: Bool { didSet { save("wakeWord", wakeWord) } }
+  /// iPhone echo cancellation on the mic (off by default; can silence Bluetooth mics).
+  @Published var echoCancellation: Bool { didSet { save("echoCancellation", echoCancellation) } }
   /// Allow the phone microphone when the glasses are not connected (handy for testing).
   @Published var allowPhoneMic: Bool { didSet { save("allowPhoneMic", allowPhoneMic) } }
 
@@ -75,6 +77,7 @@ final class Settings: ObservableObject {
     idleMinutes = d.object(forKey: "idleMinutes") as? Int ?? 5
     allowPhoneMic = d.object(forKey: "allowPhoneMic") as? Bool ?? true
     wakeWord = d.object(forKey: "wakeWord") as? Bool ?? true
+    echoCancellation = d.object(forKey: "echoCancellation") as? Bool ?? false
   }
 
   var hasGeminiKey: Bool { !geminiKey.trimmingCharacters(in: .whitespaces).isEmpty }
