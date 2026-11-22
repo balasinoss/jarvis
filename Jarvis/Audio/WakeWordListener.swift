@@ -30,7 +30,12 @@ final class WakeWordListener {
 
   // The English recognizer spells the name the way we match it below.
   private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-  private let engine = AVAudioEngine()
+  private var engine = AVAudioEngine()
+  private var allowPhoneMic = true
+  private var lastTapDate = Date()
+  private var lastRebuild = Date.distantPast
+  private var watchdog: Timer?
+  private var engineObserver: NSObjectProtocol?
   private let lock = NSLock()
   private var request: SFSpeechAudioBufferRecognitionRequest?
   private var task: SFSpeechRecognitionTask?
@@ -55,31 +60,13 @@ final class WakeWordListener {
     guard SFSpeechRecognizer.authorizationStatus() == .authorized else { throw WakeError.notAuthorized }
     guard let recognizer, recognizer.isAvailable else { throw WakeError.recognizerUnavailable }
 
-    let session = AVAudioSession.sharedInstance()
-    // mixWithOthers: music from other apps keeps playing while Jarvis waits.
-    try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP, .mixWithOthers])
-    try session.setActive(true)
-    if let glasses = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
-      try? session.setPreferredInput(glasses)
-    }
-    usingGlassesMic = session.currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
-    if !usingGlassesMic && !allowPhoneMic { throw WakeError.glassesMicMissing }
-
-    let input = engine.inputNode
-    let format = input.outputFormat(forBus: 0)
-    guard format.sampleRate > 0, format.channelCount > 0 else { throw WakeError.noMicrophone }
-    input.removeTap(onBus: 0)
-    input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
-      guard let self else { return }
-      self.lock.lock()
-      let current = self.request
-      self.lock.unlock()
-      current?.append(buffer)
-    }
-    engine.prepare()
-    try engine.start()
+    self.allowPhoneMic = allowPhoneMic
+    try configureSession()
+    try buildEngine()
     isRunning = true
+    lastTapDate = Date()
     beginRecognition()
+    startWatchdog()
 
     // After a phone call or Siri, pick up listening again.
     interruptionObserver = NotificationCenter.default.addObserver(
@@ -89,9 +76,80 @@ final class WakeWordListener {
         let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
         AVAudioSession.InterruptionType(rawValue: raw) == .ended
       else { return }
-      try? AVAudioSession.sharedInstance().setActive(true)
-      if !self.engine.isRunning { try? self.engine.start() }
-      self.beginRecognition()
+      self.lastRebuild = .distantPast
+      self.rebuildEngine()
+    }
+  }
+
+  // MARK: - Engine (rebuilt whenever Bluetooth renegotiates and the mic goes quiet)
+
+  private func configureSession() throws {
+    let session = AVAudioSession.sharedInstance()
+    // mixWithOthers: music from other apps keeps playing while Jarvis waits.
+    try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP, .mixWithOthers])
+    try session.setActive(true)
+    if let glasses = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
+      try? session.setPreferredInput(glasses)
+    }
+    usingGlassesMic = session.currentRoute.inputs.contains { $0.portType == .bluetoothHFP }
+    if !usingGlassesMic && !allowPhoneMic { throw WakeError.glassesMicMissing }
+  }
+
+  private func buildEngine() throws {
+    let newEngine = AVAudioEngine()
+    let input = newEngine.inputNode
+    var format = input.outputFormat(forBus: 0)
+    var attempts = 0
+    while (format.sampleRate <= 0 || format.channelCount == 0) && attempts < 15 {
+      Thread.sleep(forTimeInterval: 0.1)
+      format = input.outputFormat(forBus: 0)
+      attempts += 1
+    }
+    guard format.sampleRate > 0, format.channelCount > 0 else { throw WakeError.noMicrophone }
+    input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+      guard let self else { return }
+      self.lastTapDate = Date()
+      self.lock.lock()
+      let current = self.request
+      self.lock.unlock()
+      current?.append(buffer)
+    }
+    newEngine.prepare()
+    try newEngine.start()
+    engine = newEngine
+    if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+    engineObserver = NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange, object: newEngine, queue: .main
+    ) { [weak self] _ in
+      self?.rebuildEngine()
+    }
+  }
+
+  private func tearDownEngine() {
+    if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
+    engineObserver = nil
+    engine.inputNode.removeTap(onBus: 0)
+    engine.stop()
+  }
+
+  private func rebuildEngine() {
+    guard isRunning, Date().timeIntervalSince(lastRebuild) > 1 else { return }
+    lastRebuild = Date()
+    tearDownEngine()
+    try? AVAudioSession.sharedInstance().setActive(true)
+    if let glasses = AVAudioSession.sharedInstance().availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
+      try? AVAudioSession.sharedInstance().setPreferredInput(glasses)
+    }
+    try? buildEngine()
+    lastTapDate = Date()
+    beginRecognition()
+  }
+
+  private func startWatchdog() {
+    watchdog?.invalidate()
+    watchdog = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+      guard let self, self.isRunning else { return }
+      if Date().timeIntervalSince(self.lastTapDate) > 1.5 { self.rebuildEngine() }
     }
   }
 
@@ -111,8 +169,9 @@ final class WakeWordListener {
     lock.unlock()
     task?.cancel()
     task = nil
-    engine.inputNode.removeTap(onBus: 0)
-    engine.stop()
+    watchdog?.invalidate()
+    watchdog = nil
+    tearDownEngine()
     if deactivateSession {
       try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }

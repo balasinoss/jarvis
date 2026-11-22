@@ -344,7 +344,7 @@ final class AppModel: ObservableObject {
         let received = self.gemini?.audioChunksReceived ?? 0
         let messages = self.gemini?.messagesReceived ?? 0
         self.diagnostics =
-          "🎙️ \(bars)  ήχος: \(self.audio.tapBuffers)  →Gemini: \(String(format: "%.0f", sentSeconds))δ  ←απαντήσεις: \(messages)/\(received)"
+          "🎙️ \(bars)  ήχος: \(self.audio.tapBuffers)  →Gemini: \(String(format: "%.0f", sentSeconds))δ  ←απαντήσεις: \(messages)/\(received)  ↻\(self.audio.restarts)"
       }
     }
   }
