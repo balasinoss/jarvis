@@ -1,7 +1,7 @@
 import Contacts
 import MessageUI
 import UIKit
-import UserNotifications
+@preconcurrency import UserNotifications
 
 /// Prepares messages and Shortcuts. iOS never lets a third-party app send an SMS/iMessage
 /// or open another app on its own, so:

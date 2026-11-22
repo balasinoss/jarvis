@@ -29,10 +29,10 @@ struct ContentView: View {
         }
       }
       .task { app.enterStandbyIfNeeded() }
-      .onChange(of: scenePhase) { phase in
+      .onChange(of: scenePhase) { _, phase in
         if phase == .active { app.enterStandbyIfNeeded() }
       }
-      .onChange(of: settings.hasGeminiKey) { _ in app.enterStandbyIfNeeded() }
+      .onChange(of: settings.hasGeminiKey) { app.enterStandbyIfNeeded() }
       .sheet(isPresented: $showSettings) { SettingsView() }
       .sheet(isPresented: $showNotes) { NotesView() }
       .sheet(isPresented: $showPhoto) {
@@ -44,7 +44,7 @@ struct ContentView: View {
   }
 
   private var needsSetup: Bool {
-    !settings.hasGeminiKey || !glasses.isRegistered || !glasses.cameraPjarvissionGranted
+    !settings.hasGeminiKey || !glasses.isRegistered || !glasses.cameraPermissionGranted
   }
 
   private var statusColor: Color {
@@ -128,7 +128,7 @@ struct ContentView: View {
           }
         }
       }
-      .onChange(of: app.transcript.last?.text) { _ in
+      .onChange(of: app.transcript.last?.text) {
         if let last = app.transcript.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
       }
     }
@@ -174,8 +174,8 @@ struct SetupChecklist: View {
       step(done: glasses.isRegistered, "2. Σύνδεση γυαλιών με Meta AI", action: glasses.isRegistering ? "…" : "Σύνδεση") {
         glasses.connect()
       }
-      step(done: glasses.cameraPjarvissionGranted, "3. Άδεια κάμερας γυαλιών", action: "Άδεια") {
-        glasses.requestCameraPjarvission()
+      step(done: glasses.cameraPermissionGranted, "3. Άδεια κάμερας γυαλιών", action: "Άδεια") {
+        glasses.requestCameraPermission()
       }
       .disabled(!glasses.isRegistered)
       if let error = glasses.lastError {

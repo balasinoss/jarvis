@@ -166,11 +166,11 @@ final class AppModel: ObservableObject {
     log(.system, "— Νέα συνομιλία —")
 
     Task {
-      guard await AVAudioPjarvission.request() else {
+      guard await AVAudioPermission.request() else {
         fail("Χρειάζεται άδεια μικροφώνου (Ρυθμίσεις iPhone → Jarvis).")
         return
       }
-      guard isActive else { return }  // user pressed stop while the pjarvission prompt was up
+      guard isActive else { return }  // user pressed stop while the permission prompt was up
       do {
         try audio.start(allowPhoneMic: settings.allowPhoneMic)
         micSource = audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
@@ -376,8 +376,8 @@ final class AppModel: ObservableObject {
   }
 }
 
-enum AVAudioPjarvission {
+enum AVAudioPermission {
   static func request() async -> Bool {
-    await AVAudioApplication.requestRecordPjarvission()
+    await AVAudioApplication.requestRecordPermission()
   }
 }

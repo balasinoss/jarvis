@@ -64,7 +64,7 @@ struct SettingsView: View {
         Section("Γυαλιά") {
           LabeledContent("Συνδεδεμένα με Meta AI", value: glasses.isRegistered ? "Ναι" : "Όχι")
           LabeledContent("Βρέθηκαν τώρα", value: glasses.hasActiveDevice ? "Ναι" : "Όχι")
-          LabeledContent("Άδεια κάμερας", value: glasses.cameraPjarvissionGranted ? "Ναι" : "Όχι")
+          LabeledContent("Άδεια κάμερας", value: glasses.cameraPermissionGranted ? "Ναι" : "Όχι")
           if glasses.isRegistered {
             Button("Αποσύνδεση γυαλιών από τον Jarvis", role: .destructive) { glasses.disconnect() }
           } else {

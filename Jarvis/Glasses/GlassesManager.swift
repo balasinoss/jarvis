@@ -14,7 +14,7 @@ final class GlassesManager: ObservableObject {
   @Published private(set) var isRegistered = false
   @Published private(set) var isRegistering = false
   @Published private(set) var hasActiveDevice = false
-  @Published private(set) var cameraPjarvissionGranted = false
+  @Published private(set) var cameraPermissionGranted = false
   @Published private(set) var isStreaming = false
   @Published private(set) var lastError: String?
 
@@ -46,7 +46,7 @@ final class GlassesManager: ObservableObject {
       for await state in self.wearables.registrationStateStream() {
         self.isRegistered = state == .registered
         self.isRegistering = state == .registering
-        if state == .registered { await self.refreshCameraPjarvission() }
+        if state == .registered { await self.refreshCameraPermission() }
       }
     }
     Task { [weak self] in
@@ -55,7 +55,7 @@ final class GlassesManager: ObservableObject {
         self.hasActiveDevice = deviceId != nil
       }
     }
-    Task { await refreshCameraPjarvission() }
+    Task { await refreshCameraPermission() }
   }
 
   // MARK: - Registration (one-time link with the Meta AI app)
@@ -78,7 +78,7 @@ final class GlassesManager: ObservableObject {
     }
   }
 
-  /// Meta AI calls the app back with a URL after registration / pjarvission screens.
+  /// Meta AI calls the app back with a URL after registration / permission screens.
   func handleURL(_ url: URL) {
     guard
       let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -87,30 +87,30 @@ final class GlassesManager: ObservableObject {
     Task {
       do {
         _ = try await wearables.handleUrl(url)
-        await refreshCameraPjarvission()
+        await refreshCameraPermission()
       } catch {
         lastError = error.localizedDescription
       }
     }
   }
 
-  // MARK: - Camera pjarvission (granted inside the Meta AI app)
+  // MARK: - Camera permission (granted inside the Meta AI app)
 
-  func refreshCameraPjarvission() async {
+  func refreshCameraPermission() async {
     guard isRegistered else {
-      cameraPjarvissionGranted = false
+      cameraPermissionGranted = false
       return
     }
-    let status = try? await wearables.checkPjarvissionStatus(.camera)
-    cameraPjarvissionGranted = status == .granted
+    let status = try? await wearables.checkPermissionStatus(.camera)
+    cameraPermissionGranted = status == .granted
   }
 
   /// Opens the Meta AI app so the user can allow camera access. Only call from a button tap.
-  func requestCameraPjarvission() {
+  func requestCameraPermission() {
     Task {
       do {
-        let status = try await wearables.requestPjarvission(.camera)
-        cameraPjarvissionGranted = status == .granted
+        let status = try await wearables.requestPermission(.camera)
+        cameraPermissionGranted = status == .granted
       } catch {
         lastError = error.localizedDescription
       }
@@ -126,8 +126,8 @@ final class GlassesManager: ObservableObject {
       lastError = "Τα γυαλιά δεν έχουν συνδεθεί με την εφαρμογή (άνοιξε τον Jarvis και πάτα «Σύνδεση γυαλιών»)."
       return nil
     }
-    await refreshCameraPjarvission()
-    guard cameraPjarvissionGranted else {
+    await refreshCameraPermission()
+    guard cameraPermissionGranted else {
       lastError = "Δεν έχει δοθεί άδεια κάμερας στο Meta AI (άνοιξε τον Jarvis και πάτα «Άδεια κάμερας»)."
       return nil
     }
