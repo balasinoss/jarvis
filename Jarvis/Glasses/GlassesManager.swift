@@ -45,6 +45,7 @@ final class GlassesManager: ObservableObject {
     wearables = Wearables.shared
     deviceSelector = AutoDeviceSelector(wearables: wearables)
     isRegistered = wearables.registrationState == .registered
+    cameraPermissionGranted = UserDefaults.standard.bool(forKey: "cameraPermissionCached")
 
     Task { [weak self] in
       guard let self else { return }
@@ -130,25 +131,69 @@ final class GlassesManager: ObservableObject {
 
   // MARK: - Camera permission (granted inside the Meta AI app)
 
+  /// The permission is remembered on the phone. Meta's check throws an error whenever the
+  /// glasses are briefly disconnected; that is NOT a denial, so it no longer makes Jarvis ask
+  /// for the permission again. Only an explicit "denied" from Meta clears it.
   func refreshCameraPermission() async {
-    guard isRegistered else {
-      cameraPermissionGranted = false
-      return
+    guard isRegistered else { return }
+    do {
+      let status = try await wearables.checkPermissionStatus(.camera)
+      setCameraPermission(status == .granted)
+    } catch {
+      // Glasses asleep / not connected right now: keep what we already know.
     }
-    let status = try? await wearables.checkPermissionStatus(.camera)
-    cameraPermissionGranted = status == .granted
   }
+
+  private func setCameraPermission(_ granted: Bool) {
+    cameraPermissionGranted = granted
+    UserDefaults.standard.set(granted, forKey: "cameraPermissionCached")
+  }
+
+  @Published private(set) var isRequestingPermission = false
 
   /// Opens the Meta AI app so the user can allow camera access. Only call from a button tap.
   func requestCameraPermission() {
+    guard !isRequestingPermission else { return }
+    isRequestingPermission = true
+    lastError = nil
     Task {
+      defer { isRequestingPermission = false }
       do {
         let status = try await wearables.requestPermission(.camera)
-        cameraPermissionGranted = status == .granted
+        setCameraPermission(status == .granted)
+        if status != .granted {
+          lastError = "Η άδεια κάμερας δεν δόθηκε. Πάτα ξανά και διάλεξε «Always allow» στο Meta AI."
+        }
       } catch {
-        lastError = error.localizedDescription
+        lastError = Self.permissionMessage(error)
+        // The request may still have succeeded inside Meta AI; check again.
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await refreshCameraPermission()
+        if cameraPermissionGranted { lastError = nil }
       }
     }
+  }
+
+  private static func permissionMessage(_ error: Error) -> String {
+    guard let e = error as? PermissionError else { return error.localizedDescription }
+    switch e {
+    case .requestTimeout:
+      return "Το αίτημα έληξε. Πάτα ξανά «Άδεια κάμερας» και στο Meta AI πάτα αμέσως «Always allow»."
+    case .requestInProgress:
+      return "Υπάρχει ήδη ανοιχτό αίτημα στο Meta AI. Άνοιξέ το και αποδέξου, ή περίμενε λίγο και ξαναδοκίμασε."
+    case .noDevice, .noDeviceWithConnection:
+      return "Τα γυαλιά δεν είναι συνδεδεμένα. Φόρεσέ τα, άνοιξε το Meta AI για να συνδεθούν και ξαναδοκίμασε."
+    case .metaAINotInstalled:
+      return "Δεν βρέθηκε η εφαρμογή Meta AI."
+    default:
+      return "Πρόβλημα με την άδεια κάμερας (\(e.description)). Ξαναδοκίμασε."
+    }
+  }
+
+  /// Opens the glasses session in the background so the first "τι βλέπω;" is faster.
+  func prewarm() {
+    guard isRegistered, session == nil else { return }
+    Task { _ = await ensureSession() }
   }
 
   // MARK: - Taking a picture
@@ -165,7 +210,15 @@ final class GlassesManager: ObservableObject {
       lastError = "Δεν έχει δοθεί άδεια κάμερας στο Meta AI (άνοιξε τον Jarvis και πάτα «Άδεια κάμερας»)."
       return nil
     }
-    guard await ensureStream() else { return nil }
+    var streaming = await ensureStream()
+    if !streaming && !needsGlassesAppUpdate && !needsFirmwareUpdate && cameraPermissionGranted {
+      // One clean retry: drop the session and open a fresh one.
+      stopSession()
+      try? await Task.sleep(nanoseconds: 700_000_000)
+      lastError = nil
+      streaming = await ensureStream()
+    }
+    guard streaming else { return nil }
     scheduleAutoStop()
 
     // Prefer a real photo (sharper, better for reading text). Fall back to the latest video frame.
@@ -275,7 +328,8 @@ final class GlassesManager: ObservableObject {
 
     if camera == nil {
       // High resolution, low frame rate: sharper single frames (better for reading Greek text).
-      let config = StreamConfiguration(videoCodec: .raw, resolution: .high, frameRate: 7)
+      let high = UserDefaults.standard.string(forKey: "cameraQuality") == "high"
+      let config = StreamConfiguration(videoCodec: .raw, resolution: high ? .high : .medium, frameRate: high ? 7 : 15)
       do {
         guard let newCamera = try session.addCamera(config: config) else {
           lastError = "Η κάμερα των γυαλιών δεν είναι διαθέσιμη."
@@ -337,11 +391,25 @@ final class GlassesManager: ObservableObject {
     stream.errorPublisher.listen { [weak self] error in
       Task { @MainActor in
         guard let self else { return }
-        self.lastError = error.localizedDescription
+        if error == .permissionDenied { self.setCameraPermission(false) }
+        self.lastError = Self.streamMessage(error)
         self.pendingPhoto?.resume(returning: nil)
         self.pendingPhoto = nil
       }
     }.store(in: streamTokens)
+  }
+
+  private static func streamMessage(_ error: StreamError) -> String {
+    switch error {
+    case .permissionDenied: return "Δεν υπάρχει άδεια κάμερας. Πάτα «Άδεια κάμερας» στον Jarvis."
+    case .hingesClosed: return "Τα γυαλιά είναι κλειστά. Άνοιξέ τα (μπράτσα) και ξαναδοκίμασε."
+    case .thermalHot: return "Τα γυαλιά έχουν ζεσταθεί· η κάμερα σταμάτησε για προστασία. Δοκίμασε σε λίγο."
+    case .batteryLow: return "Χαμηλή μπαταρία στα γυαλιά· η κάμερα δεν ξεκινά."
+    case .deviceNotConnected, .deviceNotFound:
+      return "Τα γυαλιά δεν συνδέθηκαν για την κάμερα. Δες ότι είναι συνδεδεμένα στο Meta AI και ξαναδοκίμασε."
+    case .timeout: return "Η κάμερα άργησε να απαντήσει."
+    default: return "Κάμερα: \(error.description)"
+    }
   }
 
   private func capturePhotoWithTimeout(seconds: Double) async -> UIImage? {

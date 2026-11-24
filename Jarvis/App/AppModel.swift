@@ -36,6 +36,7 @@ final class AppModel: ObservableObject {
     let role: Role
     var text: String
     var open: Bool
+    var utterance: Int? = nil
   }
 
   @Published private(set) var status: Status = .idle
@@ -46,6 +47,8 @@ final class AppModel: ObservableObject {
   @Published private(set) var isStandby = false
   /// One-line live diagnostics (mic level, audio sent/received).
   @Published private(set) var diagnostics = ""
+  /// 0…1, drives the animated orb.
+  @Published private(set) var micLevel: Double = 0
 
   let glasses = GlassesManager()
   let settings = Settings.shared
@@ -56,6 +59,11 @@ final class AppModel: ObservableObject {
   nonisolated(unsafe) private let wake = WakeWordListener()
   /// True while waiting for "Jarvis": mic audio goes to the wake-word recognizer.
   nonisolated(unsafe) private var feedWakeWord = false
+  /// Writes your speech on screen in the chosen language (see SpeechTranscriber).
+  nonisolated(unsafe) private let transcriber = SpeechTranscriber()
+  nonisolated(unsafe) private var feedTranscriber = false
+  private var currentUserUtterance: Int?
+  private var modelTurnActive = false
   // Copies read from the audio thread (kept in sync on the main thread).
   nonisolated(unsafe) private var geminiForAudioThread: GeminiLiveClient?
   nonisolated(unsafe) private var halfDuplexSnapshot = false
@@ -88,6 +96,9 @@ final class AppModel: ObservableObject {
       self.log(.system, "👂 «Jarvis»")
       self.start(fromWakeWord: true)
     }
+    transcriber.onText = { [weak self] text, utterance in
+      self?.showUserSpeech(text, utterance: utterance)
+    }
   }
 
   /// Runs on the audio thread, so it is deliberately not tied to the main actor.
@@ -101,8 +112,10 @@ final class AppModel: ObservableObject {
 
   nonisolated private static func makeRawHandler(_ model: AppModel) -> (AVAudioPCMBuffer) -> Void {
     return { [weak model] buffer in
-      guard let model, model.feedWakeWord else { return }
-      model.wake.append(buffer)
+      guard let model else { return }
+      if model.feedWakeWord { model.wake.append(buffer) }
+      // Skip while Jarvis talks, so his own voice isn't written as yours.
+      if model.feedTranscriber && !model.audio.isSpeaking { model.transcriber.append(buffer) }
     }
   }
 
@@ -201,11 +214,19 @@ final class AppModel: ObservableObject {
           try audio.start(allowPhoneMic: settings.allowPhoneMic, echoCancellation: settings.echoCancellation)
         }
         micSource = audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
-        audio.playChime()  // "I'm listening"
+        if settings.chime { audio.playChime() }  // "I'm listening"
       } catch {
         fail(error.localizedDescription)
         return
       }
+      if settings.haptics { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+      if await WakeWordListener.requestAuthorization() {
+        transcriber.start(localeIdentifier: settings.language.speechLocale)
+        feedTranscriber = true
+      }
+      currentUserUtterance = nil
+      modelTurnActive = false
+      glasses.prewarm()  // open the glasses connection now, so "τι βλέπω;" is faster
       connectGemini()
       startIdleTimer()
       startDiagnostics()
@@ -222,6 +243,8 @@ final class AppModel: ObservableObject {
     diagTimer?.invalidate()
     diagTimer = nil
     diagnostics = ""
+    feedTranscriber = false
+    transcriber.stop()
     gemini?.disconnect()
     gemini = nil
     if backToStandby {
@@ -269,8 +292,11 @@ final class AppModel: ObservableObject {
       model: settings.geminiModel,
       voice: settings.geminiVoice,
       systemPrompt: Prompts.liveSystemPrompt(
-        language: settings.language, notes: NotesStore.shared.summary(),
-        googleSearch: settings.geminiSearch, hasClaude: settings.hasClaudeKey),
+        Prompts.Options(
+          language: settings.language, answerLength: settings.answerLength, tone: settings.tone,
+          userName: settings.userName, customInstructions: settings.customInstructions,
+          notes: NotesStore.shared.summary(), googleSearch: settings.geminiSearch,
+          hasClaude: settings.hasClaudeKey)),
       functionDeclarations: ToolRouter.declarations,
       googleSearch: settings.geminiSearch,
       resumptionHandle: resumptionHandle)
@@ -290,23 +316,29 @@ final class AppModel: ObservableObject {
       reconnectAttempts = 0
       status = .listening
       // Short spoken hello: proves the voice path (Gemini → glasses speakers) works.
-      gemini?.sendText("(Ο χρήστης μόλις σε κάλεσε. Πες μόνο «Ναι;» με μία λέξη και περίμενε.)")
+      if settings.greetOnStart && reconnectAttempts == 0 && resumptionHandle == nil {
+        gemini?.sendText(Prompts.greeting(settings.language))
+      }
       if settings.liveCamera { startLiveCamera() }
 
     case .audio(let pcm):
+      beginModelTurn()
       audio.play(pcm24k: pcm)
 
     case .interrupted:
       audio.flushPlayback()
       closeLine(.assistant)
+      modelTurnActive = false
 
     case .turnComplete:
       closeOpenLines()
+      modelTurnActive = false
 
-    case .inputTranscript(let text):
-      append(.user, text)
+    case .inputTranscript:
+      break  // Gemini's own transcript is unreliable (random languages); the iPhone writes it.
 
     case .outputTranscript(let text):
+      beginModelTurn()
       append(.assistant, text)
 
     case .toolCall(let calls):
@@ -359,23 +391,57 @@ final class AppModel: ObservableObject {
     }
   }
 
+  /// Jarvis started answering: your next words go on a new line.
+  private func beginModelTurn() {
+    guard !modelTurnActive else { return }
+    modelTurnActive = true
+    currentUserUtterance = nil
+    if let i = transcript.lastIndex(where: { $0.role == .user && $0.open }) { transcript[i].open = false }
+    transcriber.nextUtterance()
+  }
+
+  /// Live text of what the user is saying (replaces the line as words are recognized).
+  private func showUserSpeech(_ text: String, utterance: Int) {
+    guard isActive else { return }
+    lastActivity = Date()
+    if utterance == currentUserUtterance,
+      let i = transcript.lastIndex(where: { $0.utterance == utterance })
+    {
+      transcript[i].text = text
+      return
+    }
+    currentUserUtterance = utterance
+    // Keep Jarvis's current line open if he is still talking; otherwise close everything.
+    if let i = transcript.lastIndex(where: { $0.role == .user && $0.open }) { transcript[i].open = false }
+    var line = Line(role: .user, text: text, open: true)
+    line.utterance = utterance
+    // Show the question before Jarvis's answer when the answer already started.
+    transcript.append(line)
+    trimTranscript()
+  }
+
   // MARK: - On-screen diagnostics
 
   private func startDiagnostics() {
     diagTimer?.invalidate()
-    diagTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+    diagTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
       Task { @MainActor in
         guard let self, self.isActive || self.isStandby else { return }
+        let target = Double(min(1, self.audio.micLevel * 4))
+        self.micLevel = self.micLevel * 0.6 + target * 0.4
+        let source = self.audio.fellBackToPhoneMic
+          ? "Μικρόφωνο κινητού (τα γυαλιά έστελναν σιωπή)"
+          : (self.audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού")
+        if self.micSource != source { self.micSource = source }
+        guard self.settings.showDiagnostics else {
+          if !self.diagnostics.isEmpty { self.diagnostics = "" }
+          return
+        }
         let level = Int(min(1, self.audio.micLevel * 4) * 10)
         let bars = String(repeating: "▮", count: level) + String(repeating: "▯", count: 10 - level)
         let sentSeconds = Double(self.gemini?.audioChunksSent ?? 0) / 10
         let received = self.gemini?.audioChunksReceived ?? 0
         let messages = self.gemini?.messagesReceived ?? 0
-        if self.audio.fellBackToPhoneMic {
-          self.micSource = "Μικρόφωνο κινητού (τα γυαλιά έστελναν σιωπή)"
-        } else {
-          self.micSource = self.audio.usingGlassesMic ? "Μικρόφωνο γυαλιών" : "Μικρόφωνο κινητού"
-        }
         self.diagnostics =
           "🎙️ \(self.audio.isSilent ? "🔇" : "")\(bars)  ήχος: \(self.audio.tapBuffers)  →Gemini: \(String(format: "%.0f", sentSeconds))δ  ←απαντήσεις: \(messages)/\(received)  ↻\(self.audio.restarts)"
           + (self.isStandby ? "\n👂 άκουσα: \(self.wake.lastHeard)" : "")

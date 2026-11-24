@@ -127,7 +127,7 @@ final class ToolRouter {
       do {
         let answer = try await app.claude().ask(
           "Ερώτηση του χρήστη για αυτό που βλέπει: \(question)\nΑπάντησε σύντομα, για να ειπωθεί φωναχτά.",
-          imageJPEG: jpeg, system: Prompts.claudeSystem)
+          imageJPEG: jpeg, system: Prompts.claudeSystem(Settings.shared.language))
         app.log(.claude, answer)
         return ["result": answer]
       } catch {
@@ -157,7 +157,7 @@ final class ToolRouter {
     }
     app.log(.system, "🧠 Ρωτάω τον Claude…")
     do {
-      let answer = try await app.claude().ask(task, imageJPEG: jpeg, system: Prompts.claudeSystem)
+      let answer = try await app.claude().ask(task, imageJPEG: jpeg, system: Prompts.claudeSystem(Settings.shared.language))
       app.log(.claude, answer)
       let spoken = answer.count > 6000 ? String(answer.prefix(6000)) + "…" : answer
       return [

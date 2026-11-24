@@ -131,7 +131,6 @@ final class GeminiLiveClient: NSObject {
         ],
       ],
       "systemInstruction": ["parts": [["text": config.systemPrompt]]],
-      "inputAudioTranscription": [String: Any](),
       "outputAudioTranscription": [String: Any](),
       // Keeps long conversations going instead of hitting the session length limit.
       "contextWindowCompression": ["slidingWindow": [String: Any]()],
